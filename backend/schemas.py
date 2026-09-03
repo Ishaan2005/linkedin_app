@@ -9,3 +9,6 @@ class LeadCreate(BaseModel):
     linkedin_url: str | None = None
     relevance_score: float = 0
     notes: str | None = None
+
+class LeadStatusUpdate(BaseModel):
+    status: str

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from database import engine, SessionLocal
 from models import Base, Lead
-from schemas import LeadCreate
+from schemas import LeadCreate, LeadStatusUpdate
 
 Base.metadata.create_all(bind=engine)
 
@@ -63,3 +63,21 @@ def create_lead(
 def get_leads(db: Session = Depends(get_db)):
     leads = db.query(Lead).all()
     return leads
+
+@app.patch("/api/leads/{lead_id}/status")
+def update_lead_status(
+    lead_id: int,
+    status_data: LeadStatusUpdate,
+    db: Session = Depends(get_db)
+):
+    lead = db.query(Lead).filter(Lead.id == lead_id).first()
+
+    if not lead:
+        return {"error": "Lead not found"}
+
+    lead.status = status_data.status
+
+    db.commit()
+    db.refresh(lead)
+
+    return lead

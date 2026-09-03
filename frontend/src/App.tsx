@@ -1,3 +1,8 @@
+import {
+  getLeads,
+  updateLeadStatus as updateLeadStatusAPI,
+} from "./services/api";
+
 import { useState, useEffect } from 'react';
 import type {
   ActiveTab,
@@ -63,26 +68,56 @@ export function App() {
 
   // Initialize data on mount
   useEffect(() => {
-    const loadedSettings = loadSettings();
-    setSettings(loadedSettings);
-    setLeads(loadLeads());
-    setCompanies(loadCompanies());
-    setJobs(loadJobs());
-    setOutreachEvents(loadOutreachEvents());
-  }, []);
+  const loadedSettings = loadSettings();
+  setSettings(loadedSettings);
+
+  async function loadBackendLeads() {
+    try {
+      const data = await getLeads();
+      setLeads(data);
+    } catch (error) {
+      console.error("Failed to load leads from backend:", error);
+    }
+  }
+
+  loadBackendLeads();
+
+  setCompanies(loadCompanies());
+  setJobs(loadJobs());
+  setOutreachEvents(loadOutreachEvents());
+}, []);
 
   // Update a lead's status
-  const handleUpdateStatus = (leadId: string, newStatus: LeadStatus, note?: string) => {
-    const updated = updateLeadStatus(leadId, newStatus, note);
+  const handleUpdateStatus = async (
+  leadId: string,
+  newStatus: LeadStatus,
+  note?: string
+) => {
+  try {
+    // Update status in SQLite through FastAPI
+    await updateLeadStatusAPI(leadId, newStatus);
+
+    // Fetch fresh leads from backend
+    const updated = await getLeads();
+
+    // Update React state
     setLeads(updated);
+
+    // Keep this for now because outreach is still localStorage
     setOutreachEvents(loadOutreachEvents());
 
-    // Also update modal active lead if open
+    // Update modal if this lead is currently open
     if (activeLeadModal && activeLeadModal.id === leadId) {
       const found = updated.find((l) => l.id === leadId);
-      if (found) setActiveLeadModal(found);
+
+      if (found) {
+        setActiveLeadModal(found);
+      }
     }
-  };
+  } catch (error) {
+    console.error("Failed to update lead status:", error);
+  }
+};
 
   // Update lead custom notes
   const handleUpdateNotes = (leadId: string, notes: string) => {
