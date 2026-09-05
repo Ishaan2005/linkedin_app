@@ -1,8 +1,3 @@
-import {
-  getLeads,
-  updateLeadStatus as updateLeadStatusAPI,
-} from "./services/api";
-
 import { useState, useEffect } from 'react';
 import type {
   ActiveTab,
@@ -15,19 +10,23 @@ import type {
   UserSettings,
 } from './types';
 import {
-  loadCompanies,
-  loadJobs,
-  loadLeads,
-  loadOutreachEvents,
-  loadSettings,
-  resetAllToDefault,
-  saveCompanies,
-  saveJobs,
-  saveLeads,
-  saveSettings,
-  updateLeadStatus,
-} from './services/storage';
-import { calculateRelevanceScore } from './services/leadScoring';
+  getLeads,
+  updateLead,
+  updateLeadStatus as updateLeadStatusAPI,
+  getCompanies,
+  toggleSaveCompany as toggleSaveCompanyAPI,
+  getJobs,
+  createJob as createJobAPI,
+  updateJobStatus as updateJobStatusAPI,
+  getOutreachEvents,
+  getSettings,
+  saveSettings as saveSettingsAPI,
+  resetBackendData,
+  getTodaysBatch,
+  rescoreAllLeads,
+} from './services/api';
+import { defaultSettings } from './data/mockData';
+import { saveSettings as saveSettingsToLocal, resetAllToDefault } from './services/storage';
 import { exportLeadsToCsv } from './services/csvService';
 
 // Layout Components
@@ -56,7 +55,9 @@ export function App() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [outreachEvents, setOutreachEvents] = useState<OutreachEvent[]>([]);
-  const [settings, setSettings] = useState<UserSettings>(loadSettings());
+  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Modal States
   const [activeLeadModal, setActiveLeadModal] = useState<Lead | null>(null);
@@ -66,84 +67,114 @@ export function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isOpenMobile, setIsOpenMobile] = useState(false);
 
-  // Initialize data on mount
+  // Initialize data on mount from FastAPI backend
   useEffect(() => {
-  const loadedSettings = loadSettings();
-  setSettings(loadedSettings);
+    async function initApp() {
+      try {
+        setIsLoading(true);
+        setErrorMsg(null);
+        const [
+          leadsData,
+          companiesData,
+          jobsData,
+          outreachData,
+          settingsData,
+          todaysBatch,
+        ] = await Promise.all([
+          getLeads(),
+          getCompanies(),
+          getJobs(),
+          getOutreachEvents(),
+          getSettings(),
+          getTodaysBatch().catch(() => null),
+        ]);
 
-  async function loadBackendLeads() {
-    try {
-      const data = await getLeads();
-      setLeads(data);
-    } catch (error) {
-      console.error("Failed to load leads from backend:", error);
-    }
-  }
+        const todayLeadIds = new Set(
+          (todaysBatch?.items || []).map((item) => String(item.lead_id))
+        );
 
-  loadBackendLeads();
+        const markedLeads = leadsData.map((lead) => ({
+          ...lead,
+          isDailyLead: todayLeadIds.has(lead.id),
+        }));
 
-  setCompanies(loadCompanies());
-  setJobs(loadJobs());
-  setOutreachEvents(loadOutreachEvents());
-}, []);
-
-  // Update a lead's status
-  const handleUpdateStatus = async (
-  leadId: string,
-  newStatus: LeadStatus,
-  note?: string
-) => {
-  try {
-    // Update status in SQLite through FastAPI
-    await updateLeadStatusAPI(leadId, newStatus);
-
-    // Fetch fresh leads from backend
-    const updated = await getLeads();
-
-    // Update React state
-    setLeads(updated);
-
-    // Keep this for now because outreach is still localStorage
-    setOutreachEvents(loadOutreachEvents());
-
-    // Update modal if this lead is currently open
-    if (activeLeadModal && activeLeadModal.id === leadId) {
-      const found = updated.find((l) => l.id === leadId);
-
-      if (found) {
-        setActiveLeadModal(found);
+        setLeads(markedLeads);
+        setCompanies(companiesData);
+        setJobs(jobsData);
+        setOutreachEvents(outreachData);
+        setSettings(settingsData);
+        // Sync local cache fallback for synchronous helper components
+        saveSettingsToLocal(settingsData);
+      } catch (error: any) {
+        console.error('Failed to initialize application data from backend:', error);
+        setErrorMsg(error?.message || 'Failed to connect to backend server');
+      } finally {
+        setIsLoading(false);
       }
     }
-  } catch (error) {
-    console.error("Failed to update lead status:", error);
-  }
-};
+
+    initApp();
+  }, []);
+
+  // Update a lead's status (persists in backend and auto-generates outreach history)
+  const handleUpdateStatus = async (
+    leadId: string,
+    newStatus: LeadStatus,
+    note?: string
+  ) => {
+    try {
+      await updateLeadStatusAPI(leadId, newStatus, note);
+
+      // Refresh leads and outreach events from backend
+      const [updatedLeads, updatedEvents] = await Promise.all([
+        getLeads(),
+        getOutreachEvents(),
+      ]);
+
+      setLeads(updatedLeads);
+      setOutreachEvents(updatedEvents);
+
+      // Keep active lead modal in sync if currently viewing this lead
+      if (activeLeadModal && activeLeadModal.id === leadId) {
+        const targetLead = updatedLeads.find((l) => l.id === leadId);
+        if (targetLead) {
+          setActiveLeadModal(targetLead);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update lead status:', error);
+    }
+  };
 
   // Update lead custom notes
-  const handleUpdateNotes = (leadId: string, notes: string) => {
-    const updated = leads.map((l) =>
-      l.id === leadId ? { ...l, notes, updatedAt: new Date().toISOString() } : l
-    );
-    setLeads(updated);
-    saveLeads(updated);
+  const handleUpdateNotes = async (leadId: string, notes: string) => {
+    try {
+      await updateLead(leadId, { notes });
+      const updated = await getLeads();
+      setLeads(updated);
 
-    if (activeLeadModal && activeLeadModal.id === leadId) {
-      const found = updated.find((l) => l.id === leadId);
-      if (found) setActiveLeadModal(found);
+      if (activeLeadModal && activeLeadModal.id === leadId) {
+        const found = updated.find((l) => l.id === leadId);
+        if (found) setActiveLeadModal(found);
+      }
+    } catch (error) {
+      console.error('Failed to update lead notes:', error);
     }
   };
 
   // Update lead follow-up date
-  const handleUpdateFollowUpDate = (leadId: string, followUpDate: string) => {
-    const updated = leads.map((l) =>
-      l.id === leadId ? { ...l, followUpDate, updatedAt: new Date().toISOString() } : l
-    );
-    setLeads(updated);
-    saveLeads(updated);
+  const handleUpdateFollowUpDate = async (leadId: string, followUpDate: string) => {
+    try {
+      await updateLead(leadId, { followUpDate });
+      const updated = await getLeads();
+      setLeads(updated);
 
-    if (activeLeadModal && activeLeadModal.id === leadId) {
-      const found = updated.find((l) => l.id === leadId);
-      if (found) setActiveLeadModal(found);
+      if (activeLeadModal && activeLeadModal.id === leadId) {
+        const found = updated.find((l) => l.id === leadId);
+        if (found) setActiveLeadModal(found);
+      }
+    } catch (error) {
+      console.error('Failed to update lead follow-up date:', error);
     }
   };
 
@@ -165,86 +196,172 @@ export function App() {
     setActiveTab('companies');
   };
 
-  // Update job status
-  const handleUpdateJobStatus = (jobId: string, status: JobStatus) => {
-    const updated = jobs.map((j) => (j.id === jobId ? { ...j, status } : j));
-    setJobs(updated);
-    saveJobs(updated);
+  // Update job status in backend
+  const handleUpdateJobStatus = async (jobId: string, status: JobStatus) => {
+    try {
+      await updateJobStatusAPI(jobId, status);
+      const updatedJobs = await getJobs();
+      setJobs(updatedJobs);
+    } catch (error) {
+      console.error('Failed to update job status in backend:', error);
+    }
   };
 
-  // Add new custom job
-  const handleAddNewJob = (newJobData: Omit<Job, 'id'>) => {
-    const newJob: Job = {
-      ...newJobData,
-      id: `job-${Date.now()}`,
-    };
-    const updated = [newJob, ...jobs];
-    setJobs(updated);
-    saveJobs(updated);
+  // Add new custom job in backend
+  const handleAddNewJob = async (newJobData: Omit<Job, 'id'>) => {
+    try {
+      await createJobAPI(newJobData);
+      const updatedJobs = await getJobs();
+      setJobs(updatedJobs);
+    } catch (error) {
+      console.error('Failed to create new job in backend:', error);
+    }
   };
 
-  // Toggle company saved bookmark
-  const handleToggleSaveCompany = (companyId: string) => {
-    const updated = companies.map((c) =>
-      c.id === companyId ? { ...c, isSaved: !c.isSaved } : c
-    );
-    setCompanies(updated);
-    saveCompanies(updated);
+  // Toggle company saved bookmark in backend
+  const handleToggleSaveCompany = async (companyId: string) => {
+    try {
+      const targetCompany = companies.find((c) => c.id === companyId);
+      const newSaved = targetCompany ? !targetCompany.isSaved : true;
+      await toggleSaveCompanyAPI(companyId, newSaved);
+      const updatedCompanies = await getCompanies();
+      setCompanies(updatedCompanies);
+    } catch (error) {
+      console.error('Failed to toggle saved company:', error);
+    }
   };
 
-  // Save new User Settings & recalculate scores
-  const handleSaveSettings = (newSettings: UserSettings) => {
-    setSettings(newSettings);
-    saveSettings(newSettings);
+  // Save new User Settings to backend & recalculate scores
+  const handleSaveSettings = async (newSettings: UserSettings) => {
+    try {
+      const saved = await saveSettingsAPI(newSettings);
+      setSettings(saved);
+      saveSettingsToLocal(saved);
 
-    // Recalculate scores for all leads with updated criteria
-    const rescoredLeads = leads.map((lead) => {
-      const breakdown = calculateRelevanceScore(lead, newSettings, !!lead.associatedJobId);
-      return {
-        ...lead,
-        relevanceScore: breakdown.normalizedScore,
-        scoreBreakdown: breakdown,
-      };
-    });
-    setLeads(rescoredLeads);
-    saveLeads(rescoredLeads);
+      // Trigger backend rescore of all leads against updated criteria
+      await rescoreAllLeads().catch((err) => console.warn('Rescore failed:', err));
+
+      // Reload fresh leads and today's batch from backend
+      const [freshLeads, todaysBatch] = await Promise.all([
+        getLeads(),
+        getTodaysBatch().catch(() => null),
+      ]);
+      const todayLeadIds = new Set(
+        (todaysBatch?.items || []).map((item) => String(item.lead_id))
+      );
+      setLeads(freshLeads.map((l) => ({ ...l, isDailyLead: todayLeadIds.has(l.id) })));
+    } catch (error) {
+      console.error('Failed to save settings to backend:', error);
+    }
   };
 
-  // Reset database back to default demo data
-  const handleResetToDefaults = () => {
-    resetAllToDefault();
-    const freshSettings = loadSettings();
-    setSettings(freshSettings);
-    setLeads(loadLeads());
-    setCompanies(loadCompanies());
-    setJobs(loadJobs());
-    setOutreachEvents(loadOutreachEvents());
-    setActiveLeadModal(null);
-    setIsMessageModalOpen(false);
+  // Reset database back to default demo data via backend development reset endpoint
+  const handleResetToDefaults = async () => {
+    try {
+      await resetBackendData();
+      resetAllToDefault();
+
+      const [
+        freshLeads,
+        freshCompanies,
+        freshJobs,
+        freshOutreach,
+        freshSettings,
+        todaysBatch,
+      ] = await Promise.all([
+        getLeads(),
+        getCompanies(),
+        getJobs(),
+        getOutreachEvents(),
+        getSettings(),
+        getTodaysBatch().catch(() => null),
+      ]);
+
+      const todayLeadIds = new Set(
+        (todaysBatch?.items || []).map((item) => String(item.lead_id))
+      );
+      setLeads(freshLeads.map((l) => ({ ...l, isDailyLead: todayLeadIds.has(l.id) })));
+      setCompanies(freshCompanies);
+      setJobs(freshJobs);
+      setOutreachEvents(freshOutreach);
+      setSettings(freshSettings);
+      saveSettingsToLocal(freshSettings);
+
+      setActiveLeadModal(null);
+      setIsMessageModalOpen(false);
+    } catch (err) {
+      console.error('Failed to reset demo data on backend:', err);
+    }
   };
 
   // Export current leads
   const handleExportCsv = () => {
-    exportLeadsToCsv(leads, `connection_finder_leads_${new Date().toISOString().split('T')[0]}.csv`);
+    exportLeadsToCsv(
+      leads,
+      `connection_finder_leads_${new Date().toISOString().split('T')[0]}.csv`
+    );
   };
 
   // Discovery completion handler
-  const handleDiscoveryComplete = () => {
-    setLeads(loadLeads());
+  const handleDiscoveryComplete = async () => {
+    try {
+      const [updatedLeads, updatedEvents, todaysBatch] = await Promise.all([
+        getLeads(),
+        getOutreachEvents(),
+        getTodaysBatch().catch(() => null),
+      ]);
+      const todayLeadIds = new Set(
+        (todaysBatch?.items || []).map((item) => String(item.lead_id))
+      );
+      const markedLeads = updatedLeads.map((lead) => ({
+        ...lead,
+        isDailyLead: todayLeadIds.has(lead.id),
+      }));
+      setLeads(markedLeads);
+      setOutreachEvents(updatedEvents);
+    } catch (error) {
+      console.error('Failed to refresh leads after discovery:', error);
+    }
   };
 
   // Import completion handler
-  const handleImportComplete = () => {
-    setLeads(loadLeads());
+  const handleImportComplete = async () => {
+    try {
+      const [updatedLeads, updatedEvents] = await Promise.all([
+        getLeads(),
+        getOutreachEvents(),
+      ]);
+      setLeads(updatedLeads);
+      setOutreachEvents(updatedEvents);
+    } catch (error) {
+      console.error('Failed to refresh leads after import:', error);
+    }
   };
 
   // Metrics for sidebar
   const todaysLeads = leads.filter((l) => l.isDailyLead);
   const contactedTodayCount = todaysLeads.filter((l) =>
-    ['CONNECTION_SENT', 'CONNECTED', 'MESSAGE_SENT', 'RESUME_SENT', 'FOLLOW_UP', 'REPLIED', 'INTERVIEW'].includes(
-      l.status
-    )
+    [
+      'CONNECTION_SENT',
+      'CONNECTED',
+      'MESSAGE_SENT',
+      'RESUME_SENT',
+      'FOLLOW_UP',
+      'REPLIED',
+      'INTERVIEW',
+    ].includes(l.status)
   ).length;
+
+  if (isLoading && leads.length === 0 && companies.length === 0) {
+    return (
+      <div className="app-layout" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
+        <div style={{ textAlign: 'center', color: '#64748b' }}>
+          <h2>Connecting to CRM Database...</h2>
+          <p>Loading leads, target companies, jobs, and pipeline status.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-layout">
@@ -269,6 +386,13 @@ export function App() {
           onExportCsv={handleExportCsv}
           onToggleMobileMenu={() => setIsOpenMobile(!isOpenMobile)}
         />
+
+        {errorMsg && (
+          <div style={{ backgroundColor: '#fee2e2', color: '#b91c1c', padding: '10px 16px', margin: '12px 16px', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>⚠️ {errorMsg}</span>
+            <button onClick={() => setErrorMsg(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
+          </div>
+        )}
 
         {/* Dynamic Page Content */}
         <main className="app-page-body">

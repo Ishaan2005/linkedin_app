@@ -23,6 +23,7 @@ export const DiscoveryModal: React.FC<DiscoveryModalProps> = ({
   isOpen,
   onClose,
   onDiscoveryComplete,
+  dailyTarget,
 }) => {
   const [currentStep, setCurrentStep] = useState(0);
   const [statusMessage, setStatusMessage] = useState('Initializing discovery engine...');
@@ -35,7 +36,7 @@ export const DiscoveryModal: React.FC<DiscoveryModalProps> = ({
     { id: 2, title: 'Analyzing Skill Relevance', desc: 'Evaluating Verilog, RTL, ASIC & SystemVerilog alignment', icon: <Cpu size={16} /> },
     { id: 3, title: 'Removing Duplicates', desc: 'Deduplicating names, companies, and contacted leads', icon: <Filter size={16} /> },
     { id: 4, title: 'Ranking & Scoring', desc: 'Calculating transparent multi-factor relevance scores', icon: <Layers size={16} /> },
-    { id: 5, title: 'Finalizing Today’s 15', desc: 'Selecting top priority hiring leads for today', icon: <Sparkles size={16} /> },
+    { id: 5, title: `Finalizing Today’s ${dailyTarget || 15}`, desc: 'Selecting top priority hiring leads for today', icon: <Sparkles size={16} /> },
   ];
 
   const runDiscovery = async () => {
@@ -88,7 +89,7 @@ export const DiscoveryModal: React.FC<DiscoveryModalProps> = ({
             <span>AI Discovery Engine</span>
           </div>
           <h2 className="discovery-modal-title">
-            {isCompleted ? "Today's Connections Discovered!" : "Finding Today's 15 Priority Leads"}
+            {isCompleted ? "Today's Connections Discovered!" : `Finding Today's ${dailyTarget || 15} Priority Leads`}
           </h2>
           <p className="discovery-modal-subtitle">
             {isCompleted

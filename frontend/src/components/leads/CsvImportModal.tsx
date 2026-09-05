@@ -42,12 +42,12 @@ export const CsvImportModal: React.FC<CsvImportModalProps> = ({
     reader.readAsText(file);
   };
 
-  const handleRunImport = () => {
+  const handleRunImport = async () => {
     if (!csvText.trim()) return;
     setIsProcessing(true);
 
     try {
-      const result = importLeadsFromCsv(csvText);
+      const result = await importLeadsFromCsv(csvText);
       setImportResult(result);
       if (result.importedCount > 0) {
         onImportComplete();

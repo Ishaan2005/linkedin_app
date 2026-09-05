@@ -35,6 +35,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [newSkill, setNewSkill] = useState('');
   const [newLocation, setNewLocation] = useState('');
   const [newCompany, setNewCompany] = useState('');
+  const [newPriorityCompany, setNewPriorityCompany] = useState('');
 
   // New project modal / form
   const [newProjName, setNewProjName] = useState('');
@@ -113,6 +114,25 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setFormData({
       ...formData,
       targetCompanies: formData.targetCompanies.filter((c) => c !== comp),
+    });
+  };
+
+  const addPriorityCompany = () => {
+    const list = formData.priorityCompanies || [];
+    if (newPriorityCompany.trim() && !list.includes(newPriorityCompany.trim())) {
+      setFormData({
+        ...formData,
+        priorityCompanies: [...list, newPriorityCompany.trim()],
+      });
+      setNewPriorityCompany('');
+    }
+  };
+
+  const removePriorityCompany = (comp: string) => {
+    const list = formData.priorityCompanies || [];
+    setFormData({
+      ...formData,
+      priorityCompanies: list.filter((c) => c !== comp),
     });
   };
 
@@ -477,9 +497,56 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             <span>Target Companies & Geographic Hubs</span>
           </div>
 
-          {/* Companies */}
+          {/* High-Priority Companies */}
           <div className="form-group">
-            <label className="input-label">Priority Target Companies</label>
+            <label className="input-label">High-Priority Companies (Tier 1 — 20 Pts)</label>
+            <p className="text-xs text-secondary mb-2">
+              Premier semiconductor, EDA, and tech firms awarded maximum company relevance points.
+            </p>
+            <div className="tags-interactive-wrap">
+              {(formData.priorityCompanies || []).map((comp) => (
+                <span key={comp} className="tag-interactive tag-interactive-primary">
+                  <span>{comp}</span>
+                  <button
+                    type="button"
+                    onClick={() => removePriorityCompany(comp)}
+                    aria-label={`Remove ${comp}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="tag-input-row">
+              <input
+                type="text"
+                className="input-text-sm"
+                placeholder="Add high-priority company (e.g. NVIDIA, Qualcomm)..."
+                value={newPriorityCompany}
+                onChange={(e) => setNewPriorityCompany(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addPriorityCompany();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={addPriorityCompany}
+              >
+                Add Priority Company
+              </button>
+            </div>
+          </div>
+
+          {/* Target Companies */}
+          <div className="form-group mt-4">
+            <label className="input-label">Target Companies Watchlist (Tier 2 — 16 Pts)</label>
+            <p className="text-xs text-secondary mb-2">
+              Active semiconductor design services, startups, and product companies on your watchlist.
+            </p>
             <div className="tags-interactive-wrap">
               {formData.targetCompanies.map((comp) => (
                 <span key={comp} className="tag-interactive">
@@ -498,7 +565,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               <input
                 type="text"
                 className="input-text-sm"
-                placeholder="Add company name..."
+                placeholder="Add watchlist company name..."
                 value={newCompany}
                 onChange={(e) => setNewCompany(e.target.value)}
                 onKeyDown={(e) => {

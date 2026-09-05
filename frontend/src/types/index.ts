@@ -173,6 +173,7 @@ export interface UserSettings {
   targetTechnicalSkills: string[];
   targetLocations: string[];
   targetCompanies: string[];
+  priorityCompanies?: string[];
   dailyLeadTarget: number;
   minRelevanceScore: number;
   candidateProfile: CandidateProfile;

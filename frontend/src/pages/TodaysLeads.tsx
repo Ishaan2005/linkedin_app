@@ -83,7 +83,7 @@ export const TodaysLeads: React.FC<TodaysLeadsProps> = ({
             <Target size={14} />
             <span>Daily Goal Focus</span>
           </div>
-          <h2>Today's 15 Recommended Connections</h2>
+          <h2>Today's {targetCount} Recommended Connections</h2>
           <p>
             Your handpicked pipeline of hiring managers, RTL leads, and verification directors for today's outreach session.
           </p>
@@ -98,9 +98,13 @@ export const TodaysLeads: React.FC<TodaysLeadsProps> = ({
             <span className="col-label">Progress</span>
             <span className="col-val">{contactedCount} / {targetCount} contacted</span>
           </div>
-          <button className="btn-primary btn-sm" onClick={onOpenDiscovery}>
+          <button
+            className="btn-primary btn-sm"
+            onClick={onOpenDiscovery}
+            title="Safely rescore and regenerate today's top recommended connections"
+          >
             <Sparkles size={14} />
-            <span>Refresh 15</span>
+            <span>Regenerate Today's Leads</span>
           </button>
         </div>
       </div>

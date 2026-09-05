@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Building2,
@@ -52,6 +52,13 @@ export const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({
   const [copiedEmail, setCopiedEmail] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
 
+  useEffect(() => {
+    if (lead) {
+      setNotesText(lead.notes || '');
+      setFollowUpDateInput(lead.followUpDate || '');
+    }
+  }, [lead?.id, lead?.notes, lead?.followUpDate]);
+
   const filteredEvents = outreachEvents.filter((e) => e.leadId === lead.id);
 
   const handleCopyEmail = () => {
@@ -62,15 +69,15 @@ export const LeadDetailsModal: React.FC<LeadDetailsModalProps> = ({
     }
   };
 
-  const handleSaveNotes = () => {
-    onUpdateNotes(lead.id, notesText);
+  const handleSaveNotes = async () => {
+    await onUpdateNotes(lead.id, notesText);
     setNotesSaved(true);
     setTimeout(() => setNotesSaved(false), 2000);
   };
 
-  const handleSaveFollowUp = (newDate: string) => {
+  const handleSaveFollowUp = async (newDate: string) => {
     setFollowUpDateInput(newDate);
-    onUpdateFollowUpDate(lead.id, newDate);
+    await onUpdateFollowUpDate(lead.id, newDate);
   };
 
   const allStatuses: LeadStatus[] = [

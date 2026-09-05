@@ -1,13 +1,10 @@
 import type {
   ImportResult,
   Lead,
-  LeadStatus,
   RoleCategory,
   TechnicalArea,
 } from '../types';
-import { calculateRelevanceScore } from './leadScoring';
-import { getLeadDuplicateKey } from './leadDiscovery';
-import { loadLeads, saveLeads, loadSettings } from './storage';
+import { ingestCsvCandidates } from './api';
 
 export function generateSampleCsvContent(): string {
   return `name,title,company,location,linkedin_url,email,source,technical_area
@@ -90,7 +87,7 @@ export function parseTechnicalAreas(text: string): TechnicalArea[] {
   return matched.length > 0 ? matched : ['VLSI', 'ASIC'];
 }
 
-export function importLeadsFromCsv(csvText: string): ImportResult {
+export async function importLeadsFromCsv(csvText: string): Promise<ImportResult> {
   const rows = parseCsvText(csvText);
   if (rows.length < 2) {
     return {
@@ -122,15 +119,9 @@ export function importLeadsFromCsv(csvText: string): ImportResult {
     };
   }
 
-  const currentLeads = loadLeads();
-  const settings = loadSettings();
-  const existingKeys = new Set(currentLeads.map((l) => getLeadDuplicateKey(l)));
-
-  let importedCount = 0;
+  const candidateRows: Array<Record<string, any>> = [];
   let skippedCount = 0;
-  let duplicateCount = 0;
   const errors: string[] = [];
-  const newLeads: Lead[] = [];
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
@@ -140,7 +131,8 @@ export function importLeadsFromCsv(csvText: string): ImportResult {
     const title = row[titleIdx] || '';
     const company = row[companyIdx] || '';
     const location = (locationIdx !== -1 ? row[locationIdx] : '') || 'India';
-    const linkedinUrl = (linkedinIdx !== -1 ? row[linkedinIdx] : '') || '#';
+    const rawLinkedinUrl = linkedinIdx !== -1 ? row[linkedinIdx] : '';
+    const cleanLinkedinUrl = rawLinkedinUrl && rawLinkedinUrl.trim() !== '#' ? rawLinkedinUrl.trim() : undefined;
     const email = (emailIdx !== -1 ? row[emailIdx] : '') || undefined;
     const source = (sourceIdx !== -1 ? row[sourceIdx] : '') || 'CSV Import';
     const techText = techIdx !== -1 ? row[techIdx] : '';
@@ -151,81 +143,39 @@ export function importLeadsFromCsv(csvText: string): ImportResult {
       continue;
     }
 
-    const tempLead: Partial<Lead> = {
-      name: name.trim(),
-      company: company.trim(),
-      linkedinUrl: linkedinUrl.trim(),
-    };
+    const notesParts: string[] = [];
+    if (source) notesParts.push(`Source: ${source}`);
+    if (email) notesParts.push(`Email: ${email}`);
+    if (techText) notesParts.push(`Skills: ${techText}`);
 
-    const duplicateKey = getLeadDuplicateKey(tempLead);
-    if (existingKeys.has(duplicateKey)) {
-      duplicateCount++;
-      continue;
-    }
-
-    existingKeys.add(duplicateKey);
-
-    const technicalAreas = parseTechnicalAreas(techText);
-    const roleCategory = inferRoleCategory(title);
-
-    const partialLead: Partial<Lead> = {
+    candidateRows.push({
       name: name.trim(),
       title: title.trim(),
       company: company.trim(),
       location: location.trim(),
-      technicalAreas,
-      roleCategory,
-      linkedinUrl: linkedinUrl.trim(),
-      email: email ? email.trim() : undefined,
-      emailSource: email ? 'User entered' : undefined,
-      emailConfidence: email ? 'User-provided' : undefined,
-      dataSource: source.trim() || 'CSV Import',
-      status: 'NEW' as LeadStatus,
-      isDailyLead: false,
-      discoveredDate: new Date().toISOString().split('T')[0],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    const breakdown = calculateRelevanceScore(partialLead, settings, false);
-
-    const fullLead: Lead = {
-      id: `imported-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 5)}`,
-      name: partialLead.name!,
-      title: partialLead.title!,
-      company: partialLead.company!,
-      location: partialLead.location!,
-      technicalAreas: partialLead.technicalAreas!,
-      roleCategory: partialLead.roleCategory!,
-      relevanceScore: breakdown.normalizedScore,
-      scoreBreakdown: breakdown,
-      recommendationReason: `Imported lead (${source}): ${breakdown.summaryExplanation}`,
-      linkedinUrl: partialLead.linkedinUrl!,
-      email: partialLead.email,
-      emailSource: partialLead.emailSource,
-      emailConfidence: partialLead.emailConfidence,
-      dataSource: partialLead.dataSource!,
-      status: 'NEW',
-      isDailyLead: false,
-      discoveredDate: partialLead.discoveredDate!,
-      createdAt: partialLead.createdAt!,
-      updatedAt: partialLead.updatedAt!,
-    };
-
-    newLeads.push(fullLead);
-    importedCount++;
+      linkedin_url: cleanLinkedinUrl,
+      notes: notesParts.join(' | ') || undefined,
+      technical_area: techText,
+      source: source || 'csv_import',
+    });
   }
 
-  if (newLeads.length > 0) {
-    saveLeads([...newLeads, ...currentLeads]);
+  try {
+    const report = await ingestCsvCandidates(candidateRows, 'csv_import');
+    return {
+      importedCount: report.imported,
+      skippedCount: skippedCount + report.invalid,
+      duplicateCount: report.duplicates,
+      errors: [...errors, ...report.errors],
+    };
+  } catch (err: any) {
+    return {
+      importedCount: 0,
+      skippedCount,
+      duplicateCount: 0,
+      errors: [...errors, err?.message || 'Ingestion failed on backend.'],
+    };
   }
-
-  return {
-    importedCount,
-    skippedCount,
-    duplicateCount,
-    errors,
-  };
 }
 
 export function exportLeadsToCsv(leads: Lead[], filename = 'connection_finder_leads.csv'): void {

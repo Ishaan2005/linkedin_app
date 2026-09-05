@@ -1,6 +1,7 @@
 import type { Lead, LeadStatus, UserSettings } from '../types';
 import { calculateRelevanceScore } from './leadScoring';
-import { loadLeads, saveLeads, loadSettings } from './storage';
+import { loadSettings } from './storage';
+import { generateDailyLeads, getLeads, getSettings, mapApiLeadToLead } from './api';
 
 export interface DiscoveryProgressCallback {
   (step: number, message: string): void;
@@ -103,59 +104,71 @@ export class DefaultLeadDiscoveryService implements LeadDiscoveryService {
     totalEvaluated: number;
     newCount: number;
   }> {
-    const settings = loadSettings();
-    const existingLeads = loadLeads();
+    const settings = await getSettings().catch(() => loadSettings());
+    const existingLeads = await getLeads().catch(() => []);
     const todayTarget = settings.dailyLeadTarget || 15;
     const todayDate = new Date().toISOString().split('T')[0];
 
     // Step 1: Searching
     if (onProgress) onProgress(1, 'Searching candidate talent pool and verified directory sources...');
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 400));
 
     // Step 2: Analyzing
     if (onProgress) onProgress(2, 'Analyzing hardware/VLSI skill keywords and job relevance...');
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 400));
 
     // Step 3: Removing duplicates & already contacted
     if (onProgress) onProgress(3, 'Removing duplicates and already contacted leads...');
-    const deduplicated = this.removeDuplicates(existingLeads);
-    await new Promise((r) => setTimeout(r, 400));
-
-    // Step 4: Scoring and Ranking
-    if (onProgress) onProgress(4, 'Scoring relevance and ranking against candidate profile...');
-    const eligibleLeads = this.discoverLeads(deduplicated, settings);
-    const ranked = this.rankLeads(eligibleLeads, settings);
-    await new Promise((r) => setTimeout(r, 400));
-
-    // Step 5: Preparing
-    if (onProgress) onProgress(5, `Preparing today's top ${todayTarget} priority connections...`);
-    const selected = this.selectDailyLeads(ranked, todayTarget);
-    const selectedIds = new Set(selected.map((l) => l.id));
-
-    // Update all leads with the new isDailyLead flag
-    const updatedAllLeads = deduplicated.map((lead) => {
-      const isChosen = selectedIds.has(lead.id);
-      const breakdown = calculateRelevanceScore(lead, settings, !!lead.associatedJobId);
-      return {
-        ...lead,
-        isDailyLead: isChosen,
-        discoveredDate: isChosen ? todayDate : lead.discoveredDate,
-        relevanceScore: breakdown.normalizedScore,
-        scoreBreakdown: breakdown,
-        updatedAt: new Date().toISOString(),
-      };
-    });
-
-    saveLeads(updatedAllLeads);
     await new Promise((r) => setTimeout(r, 350));
 
-    const finalTodayLeads = updatedAllLeads.filter((l) => l.isDailyLead);
+    // Step 4: Scoring and Ranking via Backend Pipeline
+    if (onProgress) onProgress(4, 'Executing backend ranking pipeline & multi-factor scoring...');
+    try {
+      const batch = await generateDailyLeads(true, todayTarget, true);
+      await new Promise((r) => setTimeout(r, 350));
 
-    return {
-      todayLeads: finalTodayLeads,
-      totalEvaluated: deduplicated.length,
-      newCount: finalTodayLeads.length,
-    };
+      // Step 5: Preparing
+      if (onProgress) onProgress(5, `Preparing today's top ${batch.items.length} priority connections...`);
+      await new Promise((r) => setTimeout(r, 300));
+
+      const todayLeads: Lead[] = batch.items
+        .filter((item) => item.lead)
+        .map((item) => mapApiLeadToLead(item.lead!, true));
+
+      return {
+        todayLeads,
+        totalEvaluated: Math.max(existingLeads.length, todayLeads.length),
+        newCount: todayLeads.length,
+      };
+    } catch (err) {
+      console.warn('Backend discovery generation failed, falling back to local ranking:', err);
+      // Fallback to local ranking
+      const deduplicated = this.removeDuplicates(existingLeads);
+      const eligibleLeads = this.discoverLeads(deduplicated, settings);
+      const ranked = this.rankLeads(eligibleLeads, settings);
+      const selected = this.selectDailyLeads(ranked, todayTarget);
+      const selectedIds = new Set(selected.map((l) => l.id));
+
+      const updatedAllLeads = deduplicated.map((lead) => {
+        const isChosen = selectedIds.has(lead.id);
+        const breakdown = calculateRelevanceScore(lead, settings, !!lead.associatedJobId);
+        return {
+          ...lead,
+          isDailyLead: isChosen,
+          discoveredDate: isChosen ? todayDate : lead.discoveredDate,
+          relevanceScore: breakdown.normalizedScore,
+          scoreBreakdown: breakdown,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      const finalTodayLeads = updatedAllLeads.filter((l) => l.isDailyLead);
+      return {
+        todayLeads: finalTodayLeads,
+        totalEvaluated: deduplicated.length,
+        newCount: finalTodayLeads.length,
+      };
+    }
   }
 }
 
